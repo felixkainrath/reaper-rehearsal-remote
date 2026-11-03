@@ -1,0 +1,11 @@
+setliste.lokal.js
+*.rpp
+*.RPP
+*.rpp-bak
+*.RPP-bak
+*.reapeaks
+*.wav
+*.mp3
+Geschnitten/
+Media/
+Backups/

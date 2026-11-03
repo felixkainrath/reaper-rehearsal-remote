@@ -1,0 +1,62 @@
+<!doctype html><html lang="de"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Probenregie</title>
+<style>
+:root{color-scheme:dark;font:17px system-ui;background:#111b21;color:#f4f6f3}body{max-width:30rem;margin:auto;padding:1rem}h1{font-size:1.9rem;margin:.3rem 0}header{font-size:.83rem;color:#9ce0cb;letter-spacing:.1em}section{border-top:1px solid #47555a;padding:.9rem 0}button,select,input{font:inherit;border:1px solid #67767c;border-radius:.6rem;background:#233239;color:inherit;padding:.85rem;width:100%;box-sizing:border-box;margin:.25rem 0}button{font-weight:650;touch-action:manipulation}button:disabled{opacity:.35}#begin,#ok{background:#126951}#state{padding:.8rem;background:#20363a;border-radius:.5rem}small{color:#bed0d2}label{display:block}#message{min-height:1.5em}
+</style>
+<header>REAPER · PROBENAUFNAHME</header><h1>Probenregie</h1>
+<p id="state" role="status">Verbindung wird geprüft …</p><section>
+<label>Lied <select id="songs"></select></label><input id="custom" hidden maxlength="75" placeholder="Spontanen Titel eingeben" aria-label="Spontaner Titel">
+<button id="begin">Lied beginnt</button><button id="ok">Lied vollständig beendet</button><button id="part">Teilversuch beendet</button></section>
+<section><label>Markername <input id="markerName" maxlength="75" placeholder="z. B. Intonation im Refrain"></label><button id="marker">Punktmarker setzen</button></section>
+<section><button id="record">Probe aufnehmen</button><button id="stop">Probe beenden …</button><button id="export">MP3 + WAV am PC exportieren</button></section>
+<p id="message" role="status"></p><small>Bei Verbindungsverlust läuft die Aufnahme am Rechner weiter. Nach dem Verbinden den angezeigten Take prüfen.</small>
+<script src="probenregie-setliste.js"></script>
+<script>
+const $=id=>document.getElementById(id);
+const titles=window.probenSetliste || [];
+function add(title){if(!Array.from($('songs').options).some(o=>o.value===title))$('songs').add(new Option(title,title),$('songs').querySelector('[value=""]'))}
+titles.forEach(add);
+try{JSON.parse(localStorage.getItem('probenExtras')||'[]').forEach(add)}catch{}
+$('songs').add(new Option('＋ Spontaner Titel',''));
+$('songs').onchange=()=>{$('custom').hidden=!!$('songs').value};
+$('songs').onchange();
+let status=null,busy=false,lastBeat='',beatAt=0;
+const verbs=['record','begin','ok','part','marker','stop','export'];
+const decode=h=>new TextDecoder().decode(Uint8Array.from(h.match(/../g)||[],x=>parseInt(x,16)));
+const encode=s=>Array.from(new TextEncoder().encode(s),x=>x.toString(16).padStart(2,'0')).join('');
+async function api(command){const c=new AbortController(),t=setTimeout(()=>c.abort(),3000);try{const res=await fetch('/_/'+command,{cache:'no-store',signal:c.signal});if(!res.ok)throw Error();return await res.text()}finally{clearTimeout(t)}}
+function draw(){
+ const s=status,active=s&&s[2]==='1',open=s&&decode(s[3]);
+ $('state').textContent=s?(active?'● Aufnahme · '+new Date(Number(s[6])*1000).toISOString().slice(11,19):'■ Gestoppt')+(open?' · '+open:''):'Keine Verbindung zur Regie';
+ for(const v of verbs)$(v).disabled=busy||!s||(v==='record'?active||s[7]!=='1':v==='export'?active||s[7]==='1':v==='begin'?!active||!!open:(v==='stop'||v==='marker')?!active:!active||!open);
+}
+async function poll(){
+ const reply=await api('GET/EXTSTATE/Probenregie_v1/status');
+ const s=reply.trim().split('\t').pop().split('.');
+ if(s.length!==8)throw Error();
+ if(s[5]!==lastBeat){lastBeat=s[5];beatAt=Date.now()}
+ if(Date.now()-beatAt>4500)throw Error();
+ status=s;draw();return s
+}
+async function loop(){if(!busy){try{await poll()}catch{status=null;draw()}}setTimeout(loop,700)}
+async function send(v){
+ if(busy||!status||$(v).disabled)return;
+ const title=(v==='marker'?$('markerName').value:($('songs').value||$('custom').value)).trim();
+ if((v==='begin'||v==='marker')&&(!title||/[|\x00-\x1f]/.test(title)||encode(title).length>320)){ $('message').textContent='Bitte einen kürzeren Titel ohne Steuerzeichen oder | eingeben.';return}
+ if(v==='stop'&&!confirm('Gesamte Probe beenden? Ein offener Take zählt als Teilversuch.'))return;
+ busy=true;draw();const id=Date.now().toString(36)+Math.random().toString(36).slice(2,7),version=status[0],beat=status[5];
+ try{
+ await api('SET/EXTSTATE/Probenregie_v1/request/'+id+'.'+version+'.'+beat+'.'+v+'.'+((v==='begin'||v==='marker')?encode(title):''));
+ for(let i=0;i<12;i++){
+ await new Promise(r=>setTimeout(r,180));const s=await poll();
+ if(s[1]===id){$('message').textContent=decode(s[4]);
+ if(v==='begin'&&decode(s[3])===title&&!$('songs').value){add(title);$('songs').value=title;$('custom').hidden=true;
+ try{localStorage.setItem('probenExtras',JSON.stringify(Array.from($('songs').options,o=>o.value).filter(t=>t&&!titles.includes(t))))}catch{}}
+ return}
+ if(s[0]!==version)break;
+ }throw Error()
+ }catch{status=null;$('message').textContent='Keine Bestätigung. Aufnahmezustand und offenen Titel prüfen.'}
+ finally{busy=false;draw()}
+}
+verbs.forEach(v=>$(v).onclick=()=>send(v));draw();loop();
+</script></html>
